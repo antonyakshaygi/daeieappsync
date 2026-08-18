@@ -130,9 +130,20 @@ if ($action === 'push') {
                 if (!array_key_exists($col, $record)) {
                     respond_error("Missing field '$col' in a $table record");
                 }
+
+                $val = $record[$col];
+
+                // Convert empty strings for boolean/integer fields to 0 or null
+                if (in_array($col, ['isAdmin', 'banned', 'isDeleted'])) {
+                    $val = ($val === '' || $val === null) ? 0 : (int)(bool)$val;
+                } elseif (in_array($col, ['createdAt', 'updatedAt', 'dueDate', 'date'])) {
+                    if ($val === '') $val = null;
+                }
+
                 $cols[] = "`$col`";
                 $placeholders[] = ":$col";
-                $params[":$col"] = $record[$col];
+                $params[":$col"] = $val;
+
                 if ($col !== 'id') {
                     $updateClauses[] = "`$col` = IF(VALUES(`updatedAt`) >= `$col`, VALUES(`$col`), `$col`)";
                 }
@@ -151,5 +162,3 @@ if ($action === 'push') {
 
     respond_success(['serverTime' => now_millis()]);
 }
-
-respond_error('Unknown action');
