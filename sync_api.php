@@ -133,7 +133,7 @@ if ($action === 'push') {
 
                 $val = $record[$col];
 
-                // Convert empty strings for boolean/integer fields to 0 or null
+                // Sanitize boolean/integer fields
                 if (in_array($col, ['isAdmin', 'banned', 'isDeleted'])) {
                     $val = ($val === '' || $val === null) ? 0 : (int)(bool)$val;
                 } elseif (in_array($col, ['createdAt', 'updatedAt', 'dueDate', 'date'])) {
@@ -145,7 +145,8 @@ if ($action === 'push') {
                 $params[":$col"] = $val;
 
                 if ($col !== 'id') {
-                    $updateClauses[] = "`$col` = IF(VALUES(`updatedAt`) >= `$col`, VALUES(`$col`), `$col`)";
+                    // Correct condition: Compare incoming updatedAt against existing table's updatedAt
+                    $updateClauses[] = "`$col` = IF(VALUES(`updatedAt`) >= `$table`.`updatedAt`, VALUES(`$col`), `$table`.`$col`)";
                 }
             }
 
