@@ -41,12 +41,12 @@ function respond_success($data = []) {
 
 // Environment settings from Render
 $dbHost = getenv('DB_HOST');
-$dbPort = getenv('DB_PORT');
+$dbPort = getenv('DB_PORT') ?: '23313';
 $dbName = getenv('DB_NAME');
 $dbUser = getenv('DB_USER');
 $dbPass = getenv('DB_PASSWORD');
 
-define('SYNC_API_TOKEN', getenv('ecedc100821fe075045f25969059428') ?: 'CHANGE-ME');
+define('SYNC_API_TOKEN', getenv('SYNC_API_TOKEN') ?: 'ecedc100821fe075045f25969059428');
 
 try {
     $dsn = "mysql:host={$dbHost};port={$dbPort};dbname={$dbName};charset=utf8mb4";
