@@ -1,4 +1,22 @@
 <?php
+ini_set('display_errors', '0');
+ini_set('html_errors', '0');
+error_reporting(E_ALL);
+
+// Ensure all exceptions return structured JSON
+set_exception_handler(function ($e) {
+    http_response_code(500);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    exit;
+});
+
+header('Content-Type: application/json; charset=utf-8');
+
+
+
+
+<?php
 /**
  * DAE Family multi-device sync API.
  * Configured for Render deployment with Aiven MySQL.
@@ -7,16 +25,6 @@
  * are set in your Render service dashboard.
  */
 
-
-ini_set('display_errors', '0');
-error_reporting(E_ALL);
-
-// Intercept unhandled exceptions and output clean JSON
-set_exception_handler(function ($e) {
-    http_response_code(500);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
-    exit;
 
 
 header('Content-Type: application/json; charset=utf-8');
