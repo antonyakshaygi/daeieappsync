@@ -70,7 +70,7 @@ if (!hash_equals(SYNC_API_TOKEN, $token)) {
     respond_error('Invalid or missing API token', 401);
 }
 
-// Table mapping using camelCase column names directly matching your database
+// Table mapping matching camelCase database columns
 $TABLES = [
     'users' => [
         'id' => 'id', 'username' => 'username', 'passwordHash' => 'passwordHash',
@@ -165,17 +165,22 @@ if ($action === 'push') {
 
             foreach ($fields as $api => $db) {
                 $ph = ':p_' . preg_replace('/[^a-zA-Z0-9_]/', '_', $api);
+                $rawVal = $record[$api];
+
                 if ($api === 'updatedAt') {
                     $params[$ph] = $serverNow;
+                } elseif (in_array($api, ['isDeleted', 'isAdmin', 'banned'])) {
+                    // Explicitly convert boolean values to integer 1 or 0
+                    $params[$ph] = filter_var($rawVal, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
                 } else {
-                    $params[$ph] = $record[$api];
+                    $params[$ph] = $rawVal;
                 }
                 $placeholders[] = $ph;
             }
 
             $quotedCols = array_map(fn($c) => "`$c`", $dbCols);
             $updateClauses = [];
-            $updatedCol = $fields['updatedAt']; // 'updatedAt'
+            $updatedCol = $fields['updatedAt'];
 
             foreach ($fields as $api => $db) {
                 if ($api === 'id' || $api === 'updatedAt') continue;
