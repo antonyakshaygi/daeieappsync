@@ -1,19 +1,22 @@
 <?php
 /**
  * DAE Family multi-device sync API.
+ * Configured for Render deployment with Aiven MySQL.
  *
- * IMPORTANT: this version expects the schema produced by migration.sql:
- *   - updated_at  (BIGINT)
- *   - is_deleted  (TINYINT)
- * while the Android JSON API continues to use updatedAt / isDeleted.
- *
- * Use HTTPS and replace SYNC_API_TOKEN before deployment.
+ * Ensure environment variables (DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, SYNC_API_TOKEN)
+ * are set in your Render service dashboard.
  */
-
-define('SYNC_API_TOKEN', 'ecedc100821fe075045f25969059428');
 
 header('Content-Type: application/json; charset=utf-8');
 
+// Environment Variable Configuration
+$dbHost = getenv('DB_HOST');
+$dbPort = getenv('DB_PORT') ?: '10000'; // Default Aiven ports are typically 5-digit
+$dbName = getenv('DB_NAME');
+$dbUser = getenv('DB_USER');
+$dbPass = getenv('DB_PASSWORD');
+
+define('SYNC_API_TOKEN', getenv('SYNC_API_TOKEN') ?: 'CHANGE-ME-IN-RENDER-ENV');
 
 function respond_error($message, $code = 400) {
     http_response_code($code);
@@ -26,6 +29,22 @@ function respond_success($data = []) {
     exit;
 }
 
+// Instantiate PDO with Aiven SSL configuration
+try {
+    $dsn = "mysql:host={$dbHost};port={$dbPort};dbname={$dbName};charset=utf8mb4";
+    
+    $options = [
+        PDO::ATTR_ERRMODE                  => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE       => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES         => false,
+        PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => false, // Set to true if attaching Aiven CA cert
+    ];
+
+    $pdo = new PDO($dsn, $dbUser, $dbPass, $options);
+} catch (\PDOException $e) {
+    respond_error('Database connection failed: ' . $e->getMessage(), 500);
+}
+
 function now_millis() {
     return (int) floor(microtime(true) * 1000);
 }
@@ -36,8 +55,7 @@ if (!hash_equals(SYNC_API_TOKEN, $token)) {
 }
 
 /*
- * API field => database field.
- * Only the two sync metadata fields differ in the migrated schema.
+ * API field => database field mapping.
  */
 $TABLES = [
     'users' => [
@@ -90,9 +108,6 @@ if ($action === 'pull') {
         }
     }
 
-    // Take the cursor BEFORE reading rows. The query is bounded by this cutoff,
-    // so anything written after the cutoff is guaranteed to be picked up by the
-    // next sync instead of being skipped by an advanced cursor.
     $cutoff = now_millis();
     $updatedDb = $fields['updatedAt'];
     $sql = "SELECT " . implode(', ', $select) .
@@ -114,8 +129,6 @@ if ($action === 'pull') {
     }
     unset($row);
 
-    // The cursor is server time. Push assigns server time to accepted records,
-    // preventing device clock differences from making rows invisible to another device.
     respond_success(['data' => $rows, 'serverTime' => $cutoff]);
 }
 
@@ -137,9 +150,6 @@ if ($action === 'push') {
                 }
             }
 
-            // Every accepted write gets an authoritative server timestamp.
-            // This avoids device-clock differences and makes deletes/updates
-            // visible to every other device on the next pull.
             $serverNow = now_millis();
             $maxServerTime = max($maxServerTime, $serverNow);
 
@@ -161,7 +171,6 @@ if ($action === 'push') {
             $updateClauses = [];
             foreach ($fields as $api => $db) {
                 if ($api === 'id' || $api === 'updatedAt') continue;
-                // Only replace the existing row when this incoming write is newer.
                 $updateClauses[] = "`$db` = IF(VALUES(`updated_at`) > `$table`.`updated_at`, VALUES(`$db`), `$table`.`$db`)";
             }
             $updateClauses[] = "`updated_at` = IF(VALUES(`updated_at`) > `$table`.`updated_at`, VALUES(`updated_at`), `$table`.`updated_at`)";
