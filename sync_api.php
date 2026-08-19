@@ -10,7 +10,7 @@
  * Use HTTPS and replace SYNC_API_TOKEN before deployment.
  */
 
-define('SYNC_API_TOKEN', 'CHANGE-ME-TO-A-LONG-RANDOM-SECRET');
+define('SYNC_API_TOKEN', 'ecedc100821fe075045f25969059428');
 
 header('Content-Type: application/json; charset=utf-8');
 require_once 'config.php'; // provides $pdo
