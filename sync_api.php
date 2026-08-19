@@ -1,43 +1,19 @@
 <?php
-
-ob_start();
-ini_set('display_errors', '0');
-ini_set('html_errors', '0');
-error_reporting(E_ALL);
-
-header('Content-Type: application/json; charset=utf-8');
-
-// Return clean JSON on fatal server errors
-register_shutdown_function(function () {
-    $error = error_get_last();
-    if ($error !== null && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
-        if (ob_get_length()) ob_clean();
-        http_response_code(500);
-        echo json_encode(['success' => false, 'error' => 'Fatal Error: ' . $error['message']]);
-        exit;
-    }
-});
-
-// Return clean JSON on uncaught exceptions
-set_exception_handler(function ($e) {
-    if (ob_get_length()) ob_clean();
-    http_response_code(500);
-    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
-    exit;
-});
 /**
- * DAE Family multi-device sync API (Render + Aiven MySQL Edition)
+ * DAE Family multi-device sync API.
  *
- * Direct PDO connection using Render environment variables & Aiven SSL options.
- * Handles schema mapping: updatedAt -> updated_at, isDeleted -> is_deleted.
+ * IMPORTANT: this version expects the schema produced by migration.sql:
+ *   - updated_at  (BIGINT)
+ *   - is_deleted  (TINYINT)
+ * while the Android JSON API continues to use updatedAt / isDeleted.
+ *
+ * Use HTTPS and replace SYNC_API_TOKEN before deployment.
  */
 
-// ---------------------------------------------------------------------------
-// Configuration & Headers
-// ---------------------------------------------------------------------------
-define('SYNC_API_TOKEN', 'ecedc100821fe075045f25969059428');
+define('SYNC_API_TOKEN', 'CHANGE-ME-TO-A-LONG-RANDOM-SECRET');
 
 header('Content-Type: application/json; charset=utf-8');
+require_once 'config.php'; // provides $pdo
 
 function respond_error($message, $code = 400) {
     http_response_code($code);
@@ -50,132 +26,150 @@ function respond_success($data = []) {
     exit;
 }
 
-// ---- Database Connection via Environment Variables ----
-$host   = getenv('DB_HOST') ?: '127.0.0.1';
-$port   = getenv('DB_PORT') ?: '3306';
-$dbname = getenv('DB_NAME') ?: 'defaultdb';
-$user   = getenv('DB_USER') ?: 'root';
-$pass   = getenv('DB_PASS') ?: '';
-
-try {
-    $dsn = "mysql:host=$host;port=$port;dbname=$dbname;charset=utf8mb4";
-    $pdoOptions = [
-        PDO::ATTR_ERRMODE                  => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE       => PDO::FETCH_ASSOC,
-        // Disable SSL certificate verification so Aiven connects cleanly without requiring local ca.pem
-        PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => false,
-    ];
-    $pdo = new PDO($dsn, $user, $pass, $pdoOptions);
-} catch (PDOException $e) {
-    respond_error('Database connection failed: ' . $e->getMessage(), 500);
+function now_millis() {
+    return (int) floor(microtime(true) * 1000);
 }
 
-// ---- Auth check (supports X-Api-Token, Authorization header, or query param) ----
-$headers = getallheaders();
-$token = $_SERVER['HTTP_X_API_TOKEN'] 
-    ?? $headers['X-Api-Token'] 
-    ?? $headers['x-api-token'] 
-    ?? $_GET['token'] 
-    ?? '';
-
+$token = $_SERVER['HTTP_X_API_TOKEN'] ?? '';
 if (!hash_equals(SYNC_API_TOKEN, $token)) {
     respond_error('Invalid or missing API token', 401);
 }
 
-// ---- Table whitelist + column definitions ----
+/*
+ * API field => database field.
+ * Only the two sync metadata fields differ in the migrated schema.
+ */
 $TABLES = [
-    'users'         => ['id', 'username', 'passwordHash', 'isAdmin', 'banned', 'createdAt', 'updatedAt', 'isDeleted'],
-    'categories'    => ['id', 'name', 'updatedAt', 'isDeleted'],
-    'transactions'  => ['id', 'userId', 'date', 'description', 'categoryId', 'type', 'amount', 'updatedAt', 'isDeleted'],
+    'users' => [
+        'id' => 'id', 'username' => 'username', 'passwordHash' => 'passwordHash',
+        'isAdmin' => 'isAdmin', 'banned' => 'banned', 'createdAt' => 'createdAt',
+        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+    ],
+    'categories' => [
+        'id' => 'id', 'name' => 'name', 'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+    ],
+    'transactions' => [
+        'id' => 'id', 'userId' => 'userId', 'date' => 'date', 'description' => 'description',
+        'categoryId' => 'categoryId', 'type' => 'type', 'amount' => 'amount',
+        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+    ],
+    'assets' => [
+        'id' => 'id', 'userId' => 'userId', 'name' => 'name', 'purchaseDate' => 'purchaseDate',
+        'value' => 'value', 'type' => 'type', 'serialNo' => 'serialNo', 'policyNo' => 'policyNo',
+        'expiryDate' => 'expiryDate', 'attachmentPath' => 'attachmentPath',
+        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+    ],
+    'tasks' => [
+        'id' => 'id', 'userId' => 'userId', 'assignedToUserId' => 'assignedToUserId',
+        'taskDescription' => 'taskDescription', 'dueDate' => 'dueDate', 'status' => 'status',
+        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+    ],
+    'task_comments' => [
+        'id' => 'id', 'taskId' => 'taskId', 'userId' => 'userId', 'commentText' => 'commentText',
+        'createdAt' => 'createdAt', 'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+    ],
 ];
 
 $action = $_GET['action'] ?? '';
-$table  = $_GET['table'] ?? '';
+$table = $_GET['table'] ?? '';
+if (!isset($TABLES[$table])) respond_error('Unknown table');
+$fields = $TABLES[$table];
 
-if (!array_key_exists($table, $TABLES)) {
-    respond_error('Unknown table');
-}
-$columns = $TABLES[$table];
-
-function now_millis() {
-    return (int) round(microtime(true) * 1000);
-}
-
-// =============================================================================
-// PULL — return rows changed after `since` (epoch millis)
-// =============================================================================
+// -----------------------------------------------------------------------------
+// PULL
+// -----------------------------------------------------------------------------
 if ($action === 'pull') {
-    $since = isset($_GET['since']) ? (int) $_GET['since'] : 0;
-    $colList = implode(', ', $columns);
+    $since = isset($_GET['since']) ? (int)$_GET['since'] : 0;
 
-    $stmt = $pdo->prepare("SELECT $colList FROM `$table` WHERE updatedAt > ? ORDER BY updatedAt ASC LIMIT 2000");
+    $select = [];
+    foreach ($fields as $api => $db) {
+        if ($api === $db) {
+            $select[] = "`$db`";
+        } else {
+            $select[] = "`$db` AS `$api`";
+        }
+    }
+
+    $updatedDb = $fields['updatedAt'];
+    $sql = "SELECT " . implode(', ', $select) .
+           " FROM `$table` WHERE `$updatedDb` > ? ORDER BY `$updatedDb` ASC LIMIT 2000";
+    $stmt = $pdo->prepare($sql);
     $stmt->execute([$since]);
-    $rows = $stmt->fetchAll();
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($rows as &$row) {
         foreach (['isAdmin', 'banned', 'isDeleted'] as $boolCol) {
-            if (array_key_exists($boolCol, $row)) $row[$boolCol] = (bool) $row[$boolCol];
+            if (array_key_exists($boolCol, $row)) $row[$boolCol] = (bool)$row[$boolCol];
         }
         foreach (['createdAt', 'updatedAt'] as $longCol) {
-            if (array_key_exists($longCol, $row)) $row[$longCol] = (int) $row[$longCol];
+            if (array_key_exists($longCol, $row)) $row[$longCol] = (int)$row[$longCol];
         }
-        if (array_key_exists('amount', $row)) $row['amount'] = (float) $row['amount'];
-        if (array_key_exists('value', $row)) $row['value'] = (float) $row['value'];
+        foreach (['amount', 'value'] as $decimalCol) {
+            if (array_key_exists($decimalCol, $row)) $row[$decimalCol] = (float)$row[$decimalCol];
+        }
     }
+    unset($row);
 
+    // The cursor is server time. Push assigns server time to accepted records,
+    // preventing device clock differences from making rows invisible to another device.
     respond_success(['data' => $rows, 'serverTime' => now_millis()]);
 }
 
-// =============================================================================
-// PUSH — upsert incoming rows, last-write-wins by updatedAt
-// =============================================================================
+// -----------------------------------------------------------------------------
+// PUSH
+// -----------------------------------------------------------------------------
 if ($action === 'push') {
-    $body = file_get_contents('php://input');
-    $records = json_decode($body, true);
-    if (!is_array($records)) {
-        respond_error('Expected a JSON array of records');
-    }
+    $records = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($records)) respond_error('Expected a JSON array of records');
 
     $pdo->beginTransaction();
     try {
         foreach ($records as $record) {
-            $cols = [];
-            $placeholders = [];
-            $updateClauses = [];
-            $params = [];
-
-            foreach ($columns as $col) {
-                if (!array_key_exists($col, $record)) {
-                    respond_error("Missing field '$col' in a $table record");
-                }
-
-                $val = $record[$col];
-
-                // Convert empty strings for boolean/integer fields to 0 or null
-                if (in_array($col, ['isAdmin', 'banned', 'isDeleted'])) {
-                    $val = ($val === '' || $val === null) ? 0 : (int)(bool)$val;
-                } elseif (in_array($col, ['createdAt', 'updatedAt', 'dueDate', 'date'])) {
-                    if ($val === '') $val = null;
-                }
-
-                $cols[] = "`$col`";
-                $placeholders[] = ":$col";
-                $params[":$col"] = $val;
-
-                if ($col !== 'id') {
-                    // Correct condition: Compare incoming updatedAt against existing table's updatedAt
-                    $updateClauses[] = "`$col` = IF(VALUES(`updatedAt`) >= `$table`.`updatedAt`, VALUES(`$col`), `$table`.`$col`)";
+            foreach ($fields as $api => $_db) {
+                if (!array_key_exists($api, $record)) {
+                    throw new Exception("Missing field '$api' in a $table record");
                 }
             }
 
-            $sql = "INSERT INTO `$table` (" . implode(', ', $cols) . ") VALUES (" . implode(', ', $placeholders) . ")
-                    ON DUPLICATE KEY UPDATE " . implode(', ', $updateClauses);
+            $serverNow = now_millis();
+            $dbCols = array_values($fields);
+            $placeholders = [];
+            $params = [];
+
+            foreach ($fields as $api => $db) {
+                // updated_at is always assigned by the server on insert/update.
+                if ($api === 'updatedAt') {
+                    $placeholders[] = ':server_updated_at';
+                    continue;
+                }
+                $ph = ':p_' . preg_replace('/[^a-zA-Z0-9_]/', '_', $api);
+                $placeholders[] = $ph;
+                $params[$ph] = $record[$api];
+            }
+
+            // Store the accepted change using SERVER time, not the phone's clock.
+            // This makes sync reliable even when two devices have different clocks.
+            $params[':server_updated_at'] = $serverNow;
+
+            $quotedCols = array_map(fn($c) => "`$c`", $dbCols);
+            $updateClauses = [];
+            foreach ($fields as $api => $db) {
+                if ($api === 'id' || $api === 'updatedAt') continue;
+                $updateClauses[] = "`$db` = IF(VALUES(`updated_at`) >= `$table`.`updated_at`, VALUES(`$db`), `$table`.`$db`)";
+            }
+            $updateClauses[] = "`updated_at` = IF(VALUES(`updated_at`) >= `$table`.`updated_at`, :server_updated_at, `$table`.`updated_at`)";
+
+            // We insert the phone timestamp initially. If the row is accepted,
+            // updated_at is immediately replaced by the server timestamp.
+            $sql = "INSERT INTO `$table` (" . implode(', ', $quotedCols) . ") VALUES (" . implode(', ', $placeholders) . ")\n" .
+                   "ON DUPLICATE KEY UPDATE " . implode(', ', $updateClauses);
+
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
         }
         $pdo->commit();
-    } catch (Exception $e) {
-        $pdo->rollBack();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
         respond_error('Push failed: ' . $e->getMessage(), 500);
     }
 
