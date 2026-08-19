@@ -10,7 +10,7 @@
  * Use HTTPS and replace SYNC_API_TOKEN before deployment.
  */
 
-define('SYNC_API_TOKEN', 'ecedc100821fe075045f25969059428');
+define('SYNC_API_TOKEN', 'CHANGE-ME-TO-A-LONG-RANDOM-SECRET');
 
 header('Content-Type: application/json; charset=utf-8');
 require_once 'config.php'; // provides $pdo
@@ -90,11 +90,15 @@ if ($action === 'pull') {
         }
     }
 
+    // Take the cursor BEFORE reading rows. The query is bounded by this cutoff,
+    // so anything written after the cutoff is guaranteed to be picked up by the
+    // next sync instead of being skipped by an advanced cursor.
+    $cutoff = now_millis();
     $updatedDb = $fields['updatedAt'];
     $sql = "SELECT " . implode(', ', $select) .
-           " FROM `$table` WHERE `$updatedDb` > ? ORDER BY `$updatedDb` ASC LIMIT 2000";
+           " FROM `$table` WHERE `$updatedDb` > ? AND `$updatedDb` <= ? ORDER BY `$updatedDb` ASC LIMIT 2000";
     $stmt = $pdo->prepare($sql);
-    $stmt->execute([$since]);
+    $stmt->execute([$since, $cutoff]);
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($rows as &$row) {
@@ -112,7 +116,7 @@ if ($action === 'pull') {
 
     // The cursor is server time. Push assigns server time to accepted records,
     // preventing device clock differences from making rows invisible to another device.
-    respond_success(['data' => $rows, 'serverTime' => now_millis()]);
+    respond_success(['data' => $rows, 'serverTime' => $cutoff]);
 }
 
 // -----------------------------------------------------------------------------
@@ -124,6 +128,8 @@ if ($action === 'push') {
 
     $pdo->beginTransaction();
     try {
+        $maxServerTime = now_millis();
+
         foreach ($records as $record) {
             foreach ($fields as $api => $_db) {
                 if (!array_key_exists($api, $record)) {
@@ -131,36 +137,35 @@ if ($action === 'push') {
                 }
             }
 
+            // Every accepted write gets an authoritative server timestamp.
+            // This avoids device-clock differences and makes deletes/updates
+            // visible to every other device on the next pull.
             $serverNow = now_millis();
+            $maxServerTime = max($maxServerTime, $serverNow);
+
             $dbCols = array_values($fields);
             $placeholders = [];
             $params = [];
 
             foreach ($fields as $api => $db) {
-                // updated_at is always assigned by the server on insert/update.
-                if ($api === 'updatedAt') {
-                    $placeholders[] = ':server_updated_at';
-                    continue;
-                }
                 $ph = ':p_' . preg_replace('/[^a-zA-Z0-9_]/', '_', $api);
+                if ($api === 'updatedAt') {
+                    $params[$ph] = $serverNow;
+                } else {
+                    $params[$ph] = $record[$api];
+                }
                 $placeholders[] = $ph;
-                $params[$ph] = $record[$api];
             }
-
-            // Store the accepted change using SERVER time, not the phone's clock.
-            // This makes sync reliable even when two devices have different clocks.
-            $params[':server_updated_at'] = $serverNow;
 
             $quotedCols = array_map(fn($c) => "`$c`", $dbCols);
             $updateClauses = [];
             foreach ($fields as $api => $db) {
                 if ($api === 'id' || $api === 'updatedAt') continue;
-                $updateClauses[] = "`$db` = IF(VALUES(`updated_at`) >= `$table`.`updated_at`, VALUES(`$db`), `$table`.`$db`)";
+                // Only replace the existing row when this incoming write is newer.
+                $updateClauses[] = "`$db` = IF(VALUES(`updated_at`) > `$table`.`updated_at`, VALUES(`$db`), `$table`.`$db`)";
             }
-            $updateClauses[] = "`updated_at` = IF(VALUES(`updated_at`) >= `$table`.`updated_at`, :server_updated_at, `$table`.`updated_at`)";
+            $updateClauses[] = "`updated_at` = IF(VALUES(`updated_at`) > `$table`.`updated_at`, VALUES(`updated_at`), `$table`.`updated_at`)";
 
-            // We insert the phone timestamp initially. If the row is accepted,
-            // updated_at is immediately replaced by the server timestamp.
             $sql = "INSERT INTO `$table` (" . implode(', ', $quotedCols) . ") VALUES (" . implode(', ', $placeholders) . ")\n" .
                    "ON DUPLICATE KEY UPDATE " . implode(', ', $updateClauses);
 
@@ -173,7 +178,7 @@ if ($action === 'push') {
         respond_error('Push failed: ' . $e->getMessage(), 500);
     }
 
-    respond_success(['serverTime' => now_millis()]);
+    respond_success(['serverTime' => $maxServerTime]);
 }
 
 respond_error('Unknown action');
