@@ -87,9 +87,6 @@ $TABLES = [
     'users'         => ['id', 'username', 'passwordHash', 'isAdmin', 'banned', 'createdAt', 'updatedAt', 'isDeleted'],
     'categories'    => ['id', 'name', 'updatedAt', 'isDeleted'],
     'transactions'  => ['id', 'userId', 'date', 'description', 'categoryId', 'type', 'amount', 'updatedAt', 'isDeleted'],
-    'assets'        => ['id', 'userId', 'name', 'purchaseDate', 'value', 'type', 'serialNo', 'policyNo', 'expiryDate', 'attachmentPath', 'updatedAt', 'isDeleted'],
-    'tasks'         => ['id', 'userId', 'assignedToUserId', 'taskDescription', 'dueDate', 'status', 'updatedAt', 'isDeleted'],
-    'task_comments' => ['id', 'taskId', 'userId', 'commentText', 'createdAt', 'updatedAt', 'isDeleted'],
 ];
 
 $action = $_GET['action'] ?? '';
