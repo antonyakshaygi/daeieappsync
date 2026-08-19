@@ -1,7 +1,5 @@
 <?php
-<?php
-<?php
-// Prevent PHP from outputting HTML formatting on errors
+// Buffer output to catch any unwanted output before JSON
 ob_start();
 ini_set('display_errors', '0');
 ini_set('html_errors', '0');
@@ -9,18 +7,18 @@ error_reporting(E_ALL);
 
 header('Content-Type: application/json; charset=utf-8');
 
-// Catch fatal errors and output clean JSON
+// Return clean JSON on fatal server errors
 register_shutdown_function(function () {
     $error = error_get_last();
     if ($error !== null && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
         if (ob_get_length()) ob_clean();
         http_response_code(500);
-        echo json_encode(['success' => false, 'error' => 'Fatal Server Error: ' . $error['message']]);
+        echo json_encode(['success' => false, 'error' => 'Fatal Error: ' . $error['message']]);
         exit;
     }
 });
 
-// Catch uncaught exceptions and output clean JSON
+// Return clean JSON on uncaught exceptions
 set_exception_handler(function ($e) {
     if (ob_get_length()) ob_clean();
     http_response_code(500);
@@ -28,69 +26,36 @@ set_exception_handler(function ($e) {
     exit;
 });
 
-ini_set('display_errors', '0');
-ini_set('html_errors', '0');
-error_reporting(E_ALL);
-
-// Ensure all exceptions return structured JSON
-set_exception_handler(function ($e) {
-    http_response_code(500);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
-    exit;
-});
-
-header('Content-Type: application/json; charset=utf-8');
-
-
-
-/**
- * DAE Family multi-device sync API.
- * Configured for Render deployment with Aiven MySQL.
- *
- * Ensure environment variables (DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, SYNC_API_TOKEN)
- * are set in your Render service dashboard.
- */
-
-
-
-header('Content-Type: application/json; charset=utf-8');
-// ... rest of your script
-
-
-header('Content-Type: application/json; charset=utf-8');
-
-// Environment Variable Configuration
-$dbHost = getenv('DB_HOST');
-$dbPort = getenv('DB_PORT') ?: '10000'; // Default Aiven ports are typically 5-digit
-$dbName = getenv('DB_NAME');
-$dbUser = getenv('DB_USER');
-$dbPass = getenv('DB_PASSWORD');
-
-define('SYNC_API_TOKEN', getenv('SYNC_API_TOKEN') ?: 'CHANGE-ME-IN-RENDER-ENV');
-
 function respond_error($message, $code = 400) {
+    if (ob_get_length()) ob_clean();
     http_response_code($code);
     echo json_encode(['success' => false, 'error' => $message]);
     exit;
 }
 
 function respond_success($data = []) {
+    if (ob_get_length()) ob_clean();
     echo json_encode(array_merge(['success' => true], $data));
     exit;
 }
 
-// Instantiate PDO with Aiven SSL configuration
+// Environment settings from Render
+$dbHost = getenv('DB_HOST');
+$dbPort = getenv('DB_PORT') ?: '10000';
+$dbName = getenv('DB_NAME');
+$dbUser = getenv('DB_USER');
+$dbPass = getenv('DB_PASSWORD');
+
+define('SYNC_API_TOKEN', getenv('SYNC_API_TOKEN') ?: 'CHANGE-ME');
+
 try {
     $dsn = "mysql:host={$dbHost};port={$dbPort};dbname={$dbName};charset=utf8mb4";
-    
     $options = [
         PDO::ATTR_ERRMODE                  => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE       => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES         => false,
-        PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => false, // Set to true if attaching Aiven CA cert
+        PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => false,
     ];
-
     $pdo = new PDO($dsn, $dbUser, $dbPass, $options);
 } catch (\PDOException $e) {
     respond_error('Database connection failed: ' . $e->getMessage(), 500);
@@ -105,9 +70,6 @@ if (!hash_equals(SYNC_API_TOKEN, $token)) {
     respond_error('Invalid or missing API token', 401);
 }
 
-/*
- * API field => database field mapping.
- */
 $TABLES = [
     'users' => [
         'id' => 'id', 'username' => 'username', 'passwordHash' => 'passwordHash',
@@ -144,19 +106,13 @@ $table = $_GET['table'] ?? '';
 if (!isset($TABLES[$table])) respond_error('Unknown table');
 $fields = $TABLES[$table];
 
-// -----------------------------------------------------------------------------
 // PULL
-// -----------------------------------------------------------------------------
 if ($action === 'pull') {
     $since = isset($_GET['since']) ? (int)$_GET['since'] : 0;
 
     $select = [];
     foreach ($fields as $api => $db) {
-        if ($api === $db) {
-            $select[] = "`$db`";
-        } else {
-            $select[] = "`$db` AS `$api`";
-        }
+        $select[] = ($api === $db) ? "`$db`" : "`$db` AS `$api`";
     }
 
     $cutoff = now_millis();
@@ -183,9 +139,7 @@ if ($action === 'pull') {
     respond_success(['data' => $rows, 'serverTime' => $cutoff]);
 }
 
-// -----------------------------------------------------------------------------
 // PUSH
-// -----------------------------------------------------------------------------
 if ($action === 'push') {
     $records = json_decode(file_get_contents('php://input'), true);
     if (!is_array($records)) respond_error('Expected a JSON array of records');
