@@ -70,34 +70,35 @@ if (!hash_equals(SYNC_API_TOKEN, $token)) {
     respond_error('Invalid or missing API token', 401);
 }
 
+// Table mapping using camelCase column names directly matching your database
 $TABLES = [
     'users' => [
         'id' => 'id', 'username' => 'username', 'passwordHash' => 'passwordHash',
         'isAdmin' => 'isAdmin', 'banned' => 'banned', 'createdAt' => 'createdAt',
-        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+        'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
     ],
     'categories' => [
-        'id' => 'id', 'name' => 'name', 'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+        'id' => 'id', 'name' => 'name', 'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
     ],
     'transactions' => [
         'id' => 'id', 'userId' => 'userId', 'date' => 'date', 'description' => 'description',
         'categoryId' => 'categoryId', 'type' => 'type', 'amount' => 'amount',
-        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+        'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
     ],
     'assets' => [
         'id' => 'id', 'userId' => 'userId', 'name' => 'name', 'purchaseDate' => 'purchaseDate',
         'value' => 'value', 'type' => 'type', 'serialNo' => 'serialNo', 'policyNo' => 'policyNo',
         'expiryDate' => 'expiryDate', 'attachmentPath' => 'attachmentPath',
-        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+        'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
     ],
     'tasks' => [
         'id' => 'id', 'userId' => 'userId', 'assignedToUserId' => 'assignedToUserId',
         'taskDescription' => 'taskDescription', 'dueDate' => 'dueDate', 'status' => 'status',
-        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+        'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
     ],
     'task_comments' => [
         'id' => 'id', 'taskId' => 'taskId', 'userId' => 'userId', 'commentText' => 'commentText',
-        'createdAt' => 'createdAt', 'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
+        'createdAt' => 'createdAt', 'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
     ],
 ];
 
@@ -174,11 +175,13 @@ if ($action === 'push') {
 
             $quotedCols = array_map(fn($c) => "`$c`", $dbCols);
             $updateClauses = [];
+            $updatedCol = $fields['updatedAt']; // 'updatedAt'
+
             foreach ($fields as $api => $db) {
                 if ($api === 'id' || $api === 'updatedAt') continue;
-                $updateClauses[] = "`$db` = IF(VALUES(`updated_at`) > `$table`.`updated_at`, VALUES(`$db`), `$table`.`$db`)";
+                $updateClauses[] = "`$db` = IF(VALUES(`$updatedCol`) > `$table`.`$updatedCol`, VALUES(`$db`), `$table`.`$db`)";
             }
-            $updateClauses[] = "`updated_at` = IF(VALUES(`updated_at`) > `$table`.`updated_at`, VALUES(`updated_at`), `$table`.`updated_at`)";
+            $updateClauses[] = "`$updatedCol` = IF(VALUES(`$updatedCol`) > `$table`.`$updatedCol`, VALUES(`$updatedCol`), `$table`.`$updatedCol`)";
 
             $sql = "INSERT INTO `$table` (" . implode(', ', $quotedCols) . ") VALUES (" . implode(', ', $placeholders) . ")\n" .
                    "ON DUPLICATE KEY UPDATE " . implode(', ', $updateClauses);
