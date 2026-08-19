@@ -46,7 +46,7 @@ $dbName = getenv('DB_NAME');
 $dbUser = getenv('DB_USER');
 $dbPass = getenv('DB_PASSWORD');
 
-define('SYNC_API_TOKEN', getenv('SYNC_API_TOKEN') ?: 'CHANGE-ME');
+define('SYNC_API_TOKEN', getenv('ecedc100821fe075045f25969059428') ?: 'CHANGE-ME');
 
 try {
     $dsn = "mysql:host={$dbHost};port={$dbPort};dbname={$dbName};charset=utf8mb4";
