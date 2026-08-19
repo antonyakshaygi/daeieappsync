@@ -1,4 +1,30 @@
 <?php
+
+ob_start();
+ini_set('display_errors', '0');
+ini_set('html_errors', '0');
+error_reporting(E_ALL);
+
+header('Content-Type: application/json; charset=utf-8');
+
+// Return clean JSON on fatal server errors
+register_shutdown_function(function () {
+    $error = error_get_last();
+    if ($error !== null && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
+        if (ob_get_length()) ob_clean();
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => 'Fatal Error: ' . $error['message']]);
+        exit;
+    }
+});
+
+// Return clean JSON on uncaught exceptions
+set_exception_handler(function ($e) {
+    if (ob_get_length()) ob_clean();
+    http_response_code(500);
+    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    exit;
+});
 /**
  * DAE Family multi-device sync API (Render + Aiven MySQL Edition)
  *
