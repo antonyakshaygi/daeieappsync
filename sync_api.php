@@ -13,7 +13,7 @@
 define('SYNC_API_TOKEN', 'ecedc100821fe075045f25969059428');
 
 header('Content-Type: application/json; charset=utf-8');
-require_once 'config.php'; // provides $pdo
+
 
 function respond_error($message, $code = 400) {
     http_response_code($code);
