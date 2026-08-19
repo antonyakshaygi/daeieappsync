@@ -1,65 +1,29 @@
 <?php
-// Buffer output to catch any unwanted output before JSON
-ob_start();
-ini_set('display_errors', '0');
-ini_set('html_errors', '0');
-error_reporting(E_ALL);
+/**
+ * DAE Family multi-device sync API.
+ *
+ * IMPORTANT: this version expects the schema produced by migration.sql:
+ *   - updated_at  (BIGINT)
+ *   - is_deleted  (TINYINT)
+ * while the Android JSON API continues to use updatedAt / isDeleted.
+ *
+ * Use HTTPS and replace SYNC_API_TOKEN before deployment.
+ */
+
+define('SYNC_API_TOKEN', 'ecedc100821fe075045f25969059428');
 
 header('Content-Type: application/json; charset=utf-8');
-
-// Return clean JSON on fatal server errors
-register_shutdown_function(function () {
-    $error = error_get_last();
-    if ($error !== null && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
-        if (ob_get_length()) ob_clean();
-        http_response_code(500);
-        echo json_encode(['success' => false, 'error' => 'Fatal Error: ' . $error['message']]);
-        exit;
-    }
-});
-
-// Return clean JSON on uncaught exceptions
-set_exception_handler(function ($e) {
-    if (ob_get_length()) ob_clean();
-    http_response_code(500);
-    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
-    exit;
-});
+require_once 'config.php'; // provides $pdo
 
 function respond_error($message, $code = 400) {
-    if (ob_get_length()) ob_clean();
     http_response_code($code);
     echo json_encode(['success' => false, 'error' => $message]);
     exit;
 }
 
 function respond_success($data = []) {
-    if (ob_get_length()) ob_clean();
     echo json_encode(array_merge(['success' => true], $data));
     exit;
-}
-
-// Environment settings from Render
-$dbHost = getenv('DB_HOST');
-$dbPort = getenv('DB_PORT') ?: '23313';
-$dbName = getenv('DB_NAME');
-$dbUser = getenv('DB_USER');
-$dbPass = getenv('DB_PASSWORD');
-
-define('SYNC_API_TOKEN', getenv('SYNC_API_TOKEN') ?: 'ecedc100821fe075045f25969059428');
-
-try {
-    $dsn = "mysql:host={$dbHost};port={$dbPort};dbname={$dbName};charset=utf8mb4";
-    $options = [
-        PDO::ATTR_ERRMODE                  => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE       => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES         => false,
-        PDO::MYSQL_ATTR_SSL_CA             => '/etc/secrets/ca.pem', // Replace with the exact Filename defined in Render
-        PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => false,
-    ];
-    $pdo = new PDO($dsn, $dbUser, $dbPass, $options);
-} catch (\PDOException $e) {
-    respond_error('Database connection failed: ' . $e->getMessage(), 500);
 }
 
 function now_millis() {
@@ -71,35 +35,38 @@ if (!hash_equals(SYNC_API_TOKEN, $token)) {
     respond_error('Invalid or missing API token', 401);
 }
 
-// Table mapping matching camelCase database columns
+/*
+ * API field => database field.
+ * Only the two sync metadata fields differ in the migrated schema.
+ */
 $TABLES = [
     'users' => [
         'id' => 'id', 'username' => 'username', 'passwordHash' => 'passwordHash',
         'isAdmin' => 'isAdmin', 'banned' => 'banned', 'createdAt' => 'createdAt',
-        'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
+        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
     ],
     'categories' => [
-        'id' => 'id', 'name' => 'name', 'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
+        'id' => 'id', 'name' => 'name', 'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
     ],
     'transactions' => [
         'id' => 'id', 'userId' => 'userId', 'date' => 'date', 'description' => 'description',
         'categoryId' => 'categoryId', 'type' => 'type', 'amount' => 'amount',
-        'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
+        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
     ],
     'assets' => [
         'id' => 'id', 'userId' => 'userId', 'name' => 'name', 'purchaseDate' => 'purchaseDate',
         'value' => 'value', 'type' => 'type', 'serialNo' => 'serialNo', 'policyNo' => 'policyNo',
         'expiryDate' => 'expiryDate', 'attachmentPath' => 'attachmentPath',
-        'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
+        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
     ],
     'tasks' => [
         'id' => 'id', 'userId' => 'userId', 'assignedToUserId' => 'assignedToUserId',
         'taskDescription' => 'taskDescription', 'dueDate' => 'dueDate', 'status' => 'status',
-        'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
+        'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
     ],
     'task_comments' => [
         'id' => 'id', 'taskId' => 'taskId', 'userId' => 'userId', 'commentText' => 'commentText',
-        'createdAt' => 'createdAt', 'updatedAt' => 'updatedAt', 'isDeleted' => 'isDeleted'
+        'createdAt' => 'createdAt', 'updatedAt' => 'updated_at', 'isDeleted' => 'is_deleted'
     ],
 ];
 
@@ -108,21 +75,26 @@ $table = $_GET['table'] ?? '';
 if (!isset($TABLES[$table])) respond_error('Unknown table');
 $fields = $TABLES[$table];
 
+// -----------------------------------------------------------------------------
 // PULL
+// -----------------------------------------------------------------------------
 if ($action === 'pull') {
     $since = isset($_GET['since']) ? (int)$_GET['since'] : 0;
 
     $select = [];
     foreach ($fields as $api => $db) {
-        $select[] = ($api === $db) ? "`$db`" : "`$db` AS `$api`";
+        if ($api === $db) {
+            $select[] = "`$db`";
+        } else {
+            $select[] = "`$db` AS `$api`";
+        }
     }
 
-    $cutoff = now_millis();
     $updatedDb = $fields['updatedAt'];
     $sql = "SELECT " . implode(', ', $select) .
-           " FROM `$table` WHERE `$updatedDb` > ? AND `$updatedDb` <= ? ORDER BY `$updatedDb` ASC LIMIT 2000";
+           " FROM `$table` WHERE `$updatedDb` > ? ORDER BY `$updatedDb` ASC LIMIT 2000";
     $stmt = $pdo->prepare($sql);
-    $stmt->execute([$since, $cutoff]);
+    $stmt->execute([$since]);
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($rows as &$row) {
@@ -138,18 +110,20 @@ if ($action === 'pull') {
     }
     unset($row);
 
-    respond_success(['data' => $rows, 'serverTime' => $cutoff]);
+    // The cursor is server time. Push assigns server time to accepted records,
+    // preventing device clock differences from making rows invisible to another device.
+    respond_success(['data' => $rows, 'serverTime' => now_millis()]);
 }
 
+// -----------------------------------------------------------------------------
 // PUSH
+// -----------------------------------------------------------------------------
 if ($action === 'push') {
     $records = json_decode(file_get_contents('php://input'), true);
     if (!is_array($records)) respond_error('Expected a JSON array of records');
 
     $pdo->beginTransaction();
     try {
-        $maxServerTime = now_millis();
-
         foreach ($records as $record) {
             foreach ($fields as $api => $_db) {
                 if (!array_key_exists($api, $record)) {
@@ -158,37 +132,35 @@ if ($action === 'push') {
             }
 
             $serverNow = now_millis();
-            $maxServerTime = max($maxServerTime, $serverNow);
-
             $dbCols = array_values($fields);
             $placeholders = [];
             $params = [];
 
             foreach ($fields as $api => $db) {
-                $ph = ':p_' . preg_replace('/[^a-zA-Z0-9_]/', '_', $api);
-                $rawVal = $record[$api];
-
+                // updated_at is always assigned by the server on insert/update.
                 if ($api === 'updatedAt') {
-                    $params[$ph] = $serverNow;
-                } elseif (in_array($api, ['isDeleted', 'isAdmin', 'banned'])) {
-                    // Explicitly convert boolean values to integer 1 or 0
-                    $params[$ph] = filter_var($rawVal, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
-                } else {
-                    $params[$ph] = $rawVal;
+                    $placeholders[] = ':server_updated_at';
+                    continue;
                 }
+                $ph = ':p_' . preg_replace('/[^a-zA-Z0-9_]/', '_', $api);
                 $placeholders[] = $ph;
+                $params[$ph] = $record[$api];
             }
+
+            // Store the accepted change using SERVER time, not the phone's clock.
+            // This makes sync reliable even when two devices have different clocks.
+            $params[':server_updated_at'] = $serverNow;
 
             $quotedCols = array_map(fn($c) => "`$c`", $dbCols);
             $updateClauses = [];
-            $updatedCol = $fields['updatedAt'];
-
             foreach ($fields as $api => $db) {
                 if ($api === 'id' || $api === 'updatedAt') continue;
-                $updateClauses[] = "`$db` = IF(VALUES(`$updatedCol`) > `$table`.`$updatedCol`, VALUES(`$db`), `$table`.`$db`)";
+                $updateClauses[] = "`$db` = IF(VALUES(`updated_at`) >= `$table`.`updated_at`, VALUES(`$db`), `$table`.`$db`)";
             }
-            $updateClauses[] = "`$updatedCol` = IF(VALUES(`$updatedCol`) > `$table`.`$updatedCol`, VALUES(`$updatedCol`), `$table`.`$updatedCol`)";
+            $updateClauses[] = "`updated_at` = IF(VALUES(`updated_at`) >= `$table`.`updated_at`, :server_updated_at, `$table`.`updated_at`)";
 
+            // We insert the phone timestamp initially. If the row is accepted,
+            // updated_at is immediately replaced by the server timestamp.
             $sql = "INSERT INTO `$table` (" . implode(', ', $quotedCols) . ") VALUES (" . implode(', ', $placeholders) . ")\n" .
                    "ON DUPLICATE KEY UPDATE " . implode(', ', $updateClauses);
 
@@ -201,7 +173,7 @@ if ($action === 'push') {
         respond_error('Push failed: ' . $e->getMessage(), 500);
     }
 
-    respond_success(['serverTime' => $maxServerTime]);
+    respond_success(['serverTime' => now_millis()]);
 }
 
 respond_error('Unknown action');
