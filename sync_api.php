@@ -41,7 +41,7 @@ function respond_success($data = []) {
 
 // Environment settings from Render
 $dbHost = getenv('DB_HOST');
-$dbPort = getenv('DB_PORT') ?: '10000';
+$dbPort = getenv('DB_PORT');
 $dbName = getenv('DB_NAME');
 $dbUser = getenv('DB_USER');
 $dbPass = getenv('DB_PASSWORD');
